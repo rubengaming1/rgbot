@@ -1,276 +1,247 @@
-const discord = require("discord.js");
-const botConfig = require("./botconfig.json");
 
-const fs = require("fs");
+const {Attachment} = require('discord.js');
+const jzip = require('jszip')
+const config = require('../db/config.json');
 
-const client = new discord.Client();
-
-
-client.commands = new discord.Collection();
-
-fs.readdir("./commands/", (err, files) => {
-
-    if (err) console.log(err);
-
-    var jsFiles = files.filter(f => f.split(".").pop() === "js");
-
-    if (jsFiles.length <= 0) {
-        console.log("Geen files gevonden.");
-        return;
+exports.manageBackups = async() => {
+    const files = await fs.readdir('./backups/');
+    const current_latest = files.indexOf('latest.json');
+    if(current_latest !== -1) {
+        console.log('Archiving backup');
+        const info = require(__dirname + `/../backups/latest.json`);
+        await fs.rename(`./backups/latest.json`,`./backups/backup-${info.created}.json`);
     }
-
-    jsFiles.forEach((f, i) => {
-
-        var fileGet = require(`./commands/${f}`);
-        console.log(`File ${f} - ready`);
-
-
-        client.commands.set(fileGet.help.name, fileGet);
+    //older
+    if(files > config.maxbackups++) { //add one for latest.json
+        let dates = files.map(v => {
+            if(v === 'latest') return;
+            return v.split('-')[1].replace('.json','');
+        })
+        dates.sort((a, b) => a - b); //sort by number 
+        console.log(`[backup] deleting backup-${dates[0]}.json`);
+        await fs.unlink(__dirname + `/../backups/backup-${dates[0]}.json`)
+    } 
+}
+exports.getLatestBackup = async() => { //gets latest (non latest.json) backup
+    return new Promise(async(resolve,reject) => {
+        const files = await fs.readdir('./backups/');
+        let dates = files.map(v => {
+            if(v === 'latest.json') return;
+            return v.split('-')[1].replace('.json','');
+        })
+        return resolve(dates.sort((a, b) => b - a)[0]); //sort by number 
     })
-});
+}
 
-
-
-
-client.login(process.env.token);
-
-client.on("ready", async () => {
-
-    console.log(`${client.user.username} is atm: ONLINE`);
-    client.user.setActivity("Kijkt naar Ruben Gaming", { type: "PLAYING" })
-
-});
-
-var swearWords = [""];
-
-
-client.on("message", async message => {
-
-    if (message.author.bot) return;
-
-    if (message.channel.type == "dm") return;
-
-
-    var msg = message.content.toLowerCase();
-
-    for (let i = 0; i < swearWords.length; i++) {
-
-        if(msg.includes(swearWords[i])){
-
-            message.delete();
-
-            return message.reply("Gelieve niet te vloeken.");
-
-
-        }
-
+exports.run = async(client,msg,args) => {
+    if(!msg.member.hasPermission('ADMINISTRATOR')) {
+        if(msg.author.id !== '117024299788926978') return msg.channel.send('🚫 You do not have permission to manage backups.');
     }
-
-    client.on('message', async message => {
-        let link = ["discord.gg", "discord.com/invite", "discordapp.com/invite", "https://"]
-
-        if (link.some(word => message.content.toLowerCase().includes(word))) {
-            await message.delete()
-            return message.reply("Gelieve geen linkjes te sturen")
-            .then(m => m.delete({ timeout: 10000 }))
-        }
-
-    })
-
-
-    var prefix = botConfig.prefix;
-
-    var messageArray = message.content.split(" ");
-
-    var command = messageArray[0];
-
-    if (!message.content.startsWith(prefix)) return;
-
-    var arguments = messageArray.slice(1);
-
-    var commands = client.commands.get(command.slice(prefix.length));
-
-    if (commands) commands.run(client, message, arguments);
-
-    client.on("message", async message => {
-
-        if(message.author.bot) return;
-        if(message.channel.id == "852815568972808223") {
-      message.delete()
-      var suggestieembed = new discord.MessageEmbed()
-            .setColor("BLUE")
-            .setAuthor(message.author.tag, message.author.displayAvatarURL())
-            .setDescription(message.content)
-             message.channel.send(suggestieembed).then(embedMessage => {
-              embedMessage.react("✅");
-              embedMessage.react("❌");
-      })
-    }
-    })
-
-
-
-
-
-
-    if (command === `${prefix}kick`) {
-
-        const args = message.content.slice(prefix.length).split(/ +/);
-
-        if (!message.member.hasPermission("KICK_MEMBERS")) return message.reply("sorry jij kan dit niet");
-
-        if (!message.guild.me.hasPermission("KICK_MEMBERS")) return message.reply("Geen perms");
-
-        if (!args[1]) return message.reply("Geef een member op.");
-
-        if (!args[2]) return message.reply("Geef een reden op");
-
-        var kickUser = message.guild.member(message.mentions.users.first() || message.guild.members.get(args[1]));
-
-        var reason = args.slice(2).join(" ");
-
-        if (!kickUser) return message.reply("Kan de gebruiker niet vinden.");
-
-        var embed = new discord.MessageEmbed()
-            .setColor("#ff0000")
-            .setThumbnail(kickUser.user.displayAvatarURL)
-            .setFooter(message.member.displayName, message.author.displayAvatarURL)
-            .setTimestamp()
-            .setDescription(`** Gekickt:** ${kickUser} (${kickUser.id})
-            **Gekickt door:** ${message.author}
-            **Redenen: ** ${reason}`);
-
-        var embedPrompt = new discord.MessageEmbed()
-            .setColor("GREEN")
-            .setAuthor("Reageer binnen 30 sec.")
-            .setDescription(`Wil je ${kickUser} kicken?`);
-
-
-        message.channel.send(embedPrompt).then(async msg => {
-
-            var emoji = await promptMessage(msg, message.author, 30, ["✅", "❌"]);
-
-            if (emoji === "✅") {
-
-                msg.delete();
-
-                kickUser.kick(reason).catch(err => {
-                    if (err) return message.channel.send(`Error...`);
-                });
-
-                message.reply(embed);
-
-            } else if (emoji === "❌") {
-
-                msg.delete();
-
-                message.reply("Kick geanuleerd").then(m => m.delete(5000));
-
-            }
-
-        });
-
-    }
-
-    if (command === `${prefix}staff`) {
-        
-        var botEmbed = new discord.MessageEmbed()
-            .setColor("BLUE")
-            .setTitle("\ntest1")
-            .setDescription("text\ntest1")
-            .setDescription("Test2")
-            .setDescription("hoi")
-        return message.channel.send(botEmbed);
-    }
-
-    function RandomXP(message) {
-
-        var randomNumber = Math.floor(Math.random() * 15) + 1;
-
-        var idUser = message.author.id;
-
-        if (!levelFile[idUser]) {
-            levelFile[idUser] = {
-                xp: 0,
-                level: 0
-            }
-        }
-
-        levelFile[idUser].xp += randomNumber;
-
-        var levelUser = levelFile[idUser].level;
-        var xpUser = levelFile[idUser].xp;
-
-        var nextLevelXp = levelUser * 300;
-
-        if (nextLevelXp == 0) nextLevelXp = 100;
-
-        if (xpUser >= nextLevelXp) {
-
-            levelFile[idUser].level += 1;
-
-            fs.writeFile("./data/levels.json", JSON.stringify(levelFile), err => {
+    
+    if(args[0]) {
+        if(args[0].toLowerCase() === 'start') {
+            //perm check
+            if(!msg.guild.me.hasPermission('BAN_MEMBERS')) return msg.channel.send('❌ Need ban permissions to view ban list.')
+            this.startBackup(client,msg.guild,msg.channel,msg.author.tag)
+            .then((output) => {
+                msg.channel.send(`✅ **Backup complete: Saved ${output.xmls} new XMLs**`,new Attachment(Buffer.from(output.json),`backup-${Date.now()}.json`))
+            }).catch(err => {
+                msg.channel.send(`❌ **Error occurred during backup: ** \`${err.message}\``);
+                console.error(err.stack);
             });
-
-            if (levelUser[idUser].level == 5) {
-
-                var role = message.guild.roles.cache.find(r => r.name === "yt");
-
-                var member = message.member;
-                member.roles.add(role);
+        }else if(args[0].toLowerCase() === 'xml' || args[0].toLowerCase() === "xmls") {
+            saveXMLs(client,msg.guild)
+            .then(amount => {
+                return msg.channel.send(`✅ Backed up a total of **${amount}** new XMLs`)
+            }).catch(err => {
+                return msg.channel.send(`❌ **An error occurred while backing up XMLs:** ${err.message}`)
+            })
+        }else if(args[0].toLowerCase() === 'list') {
+            if(args[1] === "xml" || args[1] === "xmls") {
+                try {
+                    const zip = new jzip();
+                    const files = await fs.readdir('./custom_xmls');
+                    for(let file of files) {
+                        const content = await fs.readFile(`./custom_xmls/${file}`);
+                        zip.file(file,content)
+                    }
+                    const attachment = new Attachment(zip.generateNodeStream({type:'nodebuffer'}),'custom_vehicle_xmls.zip');
+                    return msg.channel.send(`There is **${files.length}** XMLs`,attachment)
+                }catch(err) {
+                    return msg.channel.send(`❌ Error while zipping: \`${err.message}\``);
+                }
+                return;
             }
+            const finalFiles = [];
+            const files = await fs.readdir('./backups/');
+            const latest = await this.getLatestBackup();
+            console.log(latest)
+            for(let file of files ) {
+                //const size = fs.statSync(`./backups/${file}`).size;
+                const content = await fs.readFile(`./backups/${file}`);
+                finalFiles.push({ name: file, content});
+            }
+            msg.channel.send(`There are **${files.length}/${config.maxBackups++}** stored backups. Latest file is **backup-${latest}.json**`,{files:finalFiles.map(v => { return {attachment:v.content,name:v.name} })});
+            //return finalFiles.forEach(v => `${v.name} - ${filesize(v.size).human('si')}`).join("\n") + "```");
+        }else if(args[0].toLowerCase() === "overwrite" || args[0].toLowerCase() === "set") {
+            return msg.channel.send('Soon:tm: - For now overwrite `latest.json`! ')
+        }else{
+            return msg.channel.send('Unknown option');
         }
+    }else{
+        return msg.channel.send('**Options:**\nstart - create a new backup\nlist - view all stored backups\nget - Get a certain backup\nconfig - change backup settings\noverwrite - set the primary backup to restore from')
     }
+};
 
+exports.config = {
+	usageIfNotSet: false
+};
 
+exports.help = {
+	name: 'backup',
+	aliases:[],
+	description: 'Backup stuffs',
+	usage:''
+};
+ 
+exports.startBackup = (client,guild,channel,starter) => {
+    return new Promise(async(resolve,reject) => {
+        try {
+            let message;
+            if(channel && starter !== 'Auto') message = await channel.send(`⌛ **Manual backup started by ${starter}**`);
 
-    client.on("message", async message => {
+            if(client.debug) console.log(`[backup] Backup has started (${starter})`);
 
-        if(message.author.bot) return;
-        if(message.channel.id == "857364886825074709") {
-      message.delete()
-      var suggestieembed = new discord.MessageEmbed()
-            .setColor("BLUE")
-            .setAuthor(message.author.tag, message.author.displayAvatarURL())
-            .setDescription(message.content)
-             message.channel.send(suggestieembed).then(embedMessage => {
-              embedMessage.react("✅");
-              embedMessage.react("❌");
-      })
-    }
-    })
-
-    client.on("message", async message => {
-
-        if(message.author.bot) return;
-        if(message.channel.id == "857364886825074709") {
-      message.delete()
-      var suggestieembed = new discord.MessageEmbed()
-            .setColor("BLUE")
-            .setAuthor(message.author.tag, message.author.displayAvatarURL())
-            .setDescription(message.content)
-             message.channel.send(suggestieembed).then(embedMessage => {
-              embedMessage.react("✅");
-              embedMessage.react("❌");
-      })
-    }
-    })
-
-
-
-
-
-
-
-    async function promptMessage(message, author, time, reactions) {
-        time *= 1000;
-        for (const reaction of reactions) {
-            await message.react(reaction);
+            const promiseOut = await Promise.all([
+                getChannels(client,guild),
+                getGuildMisc(client,guild),
+                getRoles(client,guild),
+                saveXMLs(client,guild)
+            ]).catch(err => {
+                reject(err);
+            })
+            const output = JSON.stringify({created:`${Date.now()}`,guild:promiseOut[1][0],channels:promiseOut[0][0],pins:promiseOut[0][1]
+            ,roles:promiseOut[2],bans:promiseOut[1][1],bots:promiseOut[1][2]});
+            //[[channels,pins],[guildi,bans,bot],[roles]]
+            await fs.writeFile('./backups/latest.json',output);
+            if(message) message.delete();
+            if(channel && starter === 'Auto') {
+                await channel.send('<@!117024299788926978> ✅ **Auto backup complete**',new Attachment(Buffer.from(output),`backup-${Date.now()}.json`))
+                .catch((err) => reject(err));
+            }
+            if(client.config.debug) console.log(`[backup] Backup complete! ${starter}`);
+            resolve({json:output,xmls:promiseOut[3]});
+        }catch(err) {
+            reject(err);
         }
+    });
+}
 
-        const filter = (reaction, user) => reactions.includes(reaction.emoji.name) && user.id === author.id;
+function getChannels(client,guild) {
+    return new Promise(async(resolve,reject) => {
+        try {
+            const channels = [];
+            const pin_promises = [];
+            //let pins = {};
 
-        return message.awaitReactions(filter, { max: 1, time: time }).then(collected => collected.first() && collected.first().emoji.name);
-    }
+            await guild.channels.filter(v => v.type === 'category').sort((a, b) => a.position - b.position)
+            .forEach(v => {
+                channels.push({name:v.name,position:v.position,overwrites:v.permissionOverwrites.array(),children:v.children.map(v => { return {name:v.name,topic:v.topic,permissionOverwrites:v.permissionOverwrites.array(),position:v.position,type:v.type}})});
+                let pinChannels = v.children.filter(v => v.type === 'text');
+                pinChannels.forEach(v => {
+                    if(client.config.backup.ignore_channels.includes(v.name.toLowerCase())) return;
+                    pin_promises.push(new Promise(async(resolve,reject) => {
+                        try {
+                            let savedmsgs = [], collection;
+                            if(client.config.backup.save_all_channels.includes(v.name.toLowerCase())) {
+                                collection = await v.fetchMessages({limit:100}).catch(() => {});
+                            }else{
+                                collection = await v.fetchPinnedMessages().catch(() => {})
+                            }
 
-})
+                            if(!collection) return resolve();
+                            if(collection.size === 0) return resolve();
+                            if(client.config.debug) console.log(v.name,collection.size);
+                            resolve([v.name.toLowerCase(),collection.map(v => `**[${v.author.tag}]** ${v.content.replace(/@/g, "@" + String.fromCharCode(8203))}`)]);
+                        }catch(err) {
+                            reject(err);
+                        }
+                    }))
+                })
+            })
+            /*pins = {
+                ch1:[pin1,pin2],
+                ch2:[pin1]
+            }*/
+            let pins = {};
+            Promise.all(pin_promises)
+            .then(values => {
+                values.forEach(v => {
+                    if(!v) return;
+                    pins[v[0]] = v[1];
+                })
+            }).then(() => {
+                resolve([channels,pins])
+            })
+            //promise.all: [[name,pins],[name,pins]]
+            //resolve([channels,pins])
+        }catch(err) {
+            reject(err);
+        }
+    })
+}
+function getGuildMisc(client,guild) {
+    return new Promise(async(resolve,reject) => {
+        try {
+            const guildi = {name:guild.name,region:guild.region};
+            const bans = await guild.fetchBans().then(m => m.map(v => v.id));
+            const bots = guild.members.filter(v => v.user.bot && v.user.id !== client.user.id).map(v => { return {name:v.user.username,id:v.id}});
+            bots.push({name:client.user.username,id:client.user.id});
+            resolve([guildi,bans,bots]);
+        }catch(err) {
+            reject(err);
+        }
+    })
+}
+
+function saveXMLs(client,guild) {
+    return new Promise(async(resolve,reject) => {
+        try {
+            const channel = client.channels.find(v => v.name === client.config.backup.xml_channel_name);
+            const attachments = await fs.readdir('./custom_xmls');
+            if(!channel) return console.warn('[backup] Warn: XML channel not found');
+
+            let counter = 0;
+            await channel.fetchMessages({limit:100})
+            .then(msgs => {
+                msgs.forEach(m => {
+                    if(m.attachments.size === 0) return;
+                    m.attachments.forEach(file => {
+                        if(attachments.includes(file.filename)) return;
+                        if(!file.filename.endsWith('.xml')) return;
+                        fs.writeFile(`./custom_xmls/${m.author.id}-${file.filename}`,file.content)
+                        .then(() => counter++)
+                        .catch(err => reject(err));
+                    })
+                })
+            })
+            if(client.config.debug) console.log(`[backup] saved ${counter} new XMLs`)
+            resolve(counter);
+        }catch(err) {
+            reject(err);
+        }
+    });
+}
+
+function getRoles(client,guild) {
+    return new Promise((resolve,reject) => {
+        try {
+            const roles = guild.roles.map(v => {
+                return {id:v.id,name:v.name,mentionable:v.mentionable,hoist:v.hoist,permissions:v.permissions,position:v.position,color:v.color,}
+            })
+            resolve(roles);
+        }catch(err) {
+            reject(err)
+        }
+    })
+}
